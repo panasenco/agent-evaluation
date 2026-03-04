@@ -3,6 +3,7 @@
 ```yaml title="agenteval.yml"
 evaluator:
   model: claude-3
+  template_root: /path/to/custom/templates  # optional
 target:
   type: bedrock-agent
   bedrock_agent_id: string

@@ -60,6 +60,7 @@ The principal must have [InvokeModel](https://docs.aws.amazon.com/bedrock/latest
 ```yaml title="agenteval.yml"
 evaluator:
   model: claude-3
+  template_root: /path/to/custom/templates
   provisioned_throughput_arn: my-throughput-arn
   aws_profile: my-profile
   aws_region: us-west-2
@@ -79,6 +80,37 @@ Name of the model used to run evaluation. This must be one of:
 - `llama-3_3-us` (Llama 3.3 70B)
 
 The models suffixed with `-us` are using default USA cross region inference profile. Bedrock cross region [documentation link](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles-support.html).
+
+---
+
+`template_root` _(string; optional)_
+
+Path to a directory containing custom evaluation templates. When specified, the evaluator will use templates from this directory instead of the built-in canonical templates.
+
+The directory structure should mirror the canonical template layout:
+
+```
+/path/to/custom/templates/
+├── system/
+│   ├── generate_evaluation.jinja
+│   ├── generate_initial_prompt.jinja
+│   ├── generate_test_status.jinja
+│   └── generate_user_response.jinja
+└── runtime/
+    ├── generate_evaluation.jinja
+    ├── generate_initial_prompt.jinja
+    ├── generate_test_status.jinja
+    └── generate_user_response.jinja
+```
+
+Custom templates allow you to:
+- Modify evaluation criteria and reasoning logic
+- Adapt prompts for domain-specific evaluation (e.g., financial, medical, technical)
+- Customize system instructions and response formatting
+- Implement specialized evaluation methodologies
+
+If not specified, uses the default canonical evaluation templates.
+
 ---
 
 `custom-config` _(dict; optional)_
