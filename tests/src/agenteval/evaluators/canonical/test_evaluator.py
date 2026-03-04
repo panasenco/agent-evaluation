@@ -204,3 +204,35 @@ class TestCanonical:
 
         assert result.passed is False
         assert mock_generate_user_response.call_count == 1
+
+    def test_constructor_with_default_template_root(self, mocker, test_fixture, target_fixture):
+        """Test that CanonicalEvaluator uses default template path when template_root is None."""
+        mock_session = mocker.patch.object(aws.boto3, "Session")
+        mocker.patch.object(mock_session.return_value, "client")
+
+        mock_get_template = mocker.patch.object(evaluator.jinja_env, "get_template")
+
+        evaluator.CanonicalEvaluator(
+            aws_profile="test-profile",
+            aws_region="us-west-2",
+            endpoint_url=None,
+            model_config=DEFAULT_CLAUDE_3_MODEL_CONFIG,
+            test=test_fixture,
+            target=target_fixture,
+            work_dir="test_dir",
+            template_root=None,
+        )
+
+        # Verify templates are loaded from default canonical path
+        expected_calls = [
+            mocker.call("evaluators/canonical/system/generate_initial_prompt.jinja"),
+            mocker.call("evaluators/canonical/runtime/generate_initial_prompt.jinja"),
+            mocker.call("evaluators/canonical/system/generate_user_response.jinja"),
+            mocker.call("evaluators/canonical/runtime/generate_user_response.jinja"),
+            mocker.call("evaluators/canonical/system/generate_test_status.jinja"),
+            mocker.call("evaluators/canonical/runtime/generate_test_status.jinja"),
+            mocker.call("evaluators/canonical/system/generate_evaluation.jinja"),
+            mocker.call("evaluators/canonical/runtime/generate_evaluation.jinja"),
+        ]
+        mock_get_template.assert_has_calls(expected_calls, any_order=True)
+

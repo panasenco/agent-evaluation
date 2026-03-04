@@ -6,6 +6,7 @@ import os
 import re
 from typing import Tuple
 
+from jinja2 import Environment, FileSystemLoader
 from agenteval import jinja_env
 from agenteval.evaluators import BaseEvaluator
 from agenteval.evaluators.bedrock_request.bedrock_request_handler import (
@@ -65,16 +66,23 @@ class CanonicalEvaluator(BaseEvaluator):
         """Initialize the evaluator."""
         super().__init__(**kwargs)
 
-        # Use custom template_root if provided, otherwise default to canonical templates
-        template_root = self.template_root or _PROMPT_TEMPLATE_ROOT
-
+        if self.template_root:
+            # Create a custom Jinja template environment that uses the FileSystemLoader rather than the PackageLoader
+            template_env = Environment(
+                loader=FileSystemLoader(self.template_root),
+                autoescape=jinja_env.autoescape,
+            )
+            template_prefix = ""
+        else:
+            template_env = jinja_env
+            template_prefix = f"{_PROMPT_TEMPLATE_ROOT}/"
         self._prompt_template_map = {
             name: {
-                "system": jinja_env.get_template(
-                    os.path.join(template_root, _SYSTEM_PROMPT_DIR, f"{name}.jinja")
+                "system": template_env.get_template(
+                    f"{template_prefix}{_SYSTEM_PROMPT_DIR}/{name}.jinja"
                 ),
-                "prompt": jinja_env.get_template(
-                    os.path.join(template_root, _RUNTIME_PROMPT_DIR, f"{name}.jinja")
+                "prompt": template_env.get_template(
+                    f"{template_prefix}{_RUNTIME_PROMPT_DIR}/{name}.jinja"
                 ),
             }
             for name in _PROMPT_TEMPLATE_NAMES

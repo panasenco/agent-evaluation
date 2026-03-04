@@ -69,3 +69,37 @@ class TestEvaluatorFactory:
 
         with pytest.raises(KeyError):
             broken_config._get_evaluator_class()
+
+    def test_create_with_template_root(self, mocker):
+        """Test that template_root configuration is passed to evaluator constructor."""
+        factory = evaluator_factory.EvaluatorFactory(
+            config={
+                "model": "claude-3",
+                "eval_method": "canonical",
+                "template_root": "custom/templates",
+                "aws_region": "us-west-2",
+            }
+        )
+
+        mock_get_evaluator_class = mocker.patch.object(
+            factory, "_get_evaluator_class"
+        )
+        mock_evaluator_cls = mocker.patch.object(
+            evaluator_factory, evaluator_factory._EVALUATOR_METHOD_MAP["canonical"].__name__
+        )
+        mock_get_evaluator_class.return_value = mock_evaluator_cls
+
+        test = mocker.MagicMock()
+        target = mocker.MagicMock()
+        work_dir = os.getcwd()
+
+        factory.create(test, target, work_dir)
+
+        mock_evaluator_cls.assert_called_once_with(
+            test=test,
+            target=target,
+            work_dir=work_dir,
+            aws_region="us-west-2",
+            model_config=evaluator_factory.DEFAULT_CLAUDE_3_MODEL_CONFIG,
+            template_root="custom/templates",
+        )
