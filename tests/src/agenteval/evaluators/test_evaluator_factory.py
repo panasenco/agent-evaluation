@@ -47,7 +47,12 @@ class TestEvaluatorFactory:
         factory.create(test, target, work_dir)
 
         mock_evaluator_cls.assert_called_once_with(
-            test=test, target=target, work_dir=work_dir, aws_region="us-west-2", model_config=expected_model_config
+            test=test,
+            target=target,
+            work_dir=work_dir,
+            aws_region="us-west-2",
+            model_config=expected_model_config,
+            template_root=None,
         )
 
     def test_get_evaluator_class_works_as_expected(self, target_factory_fixture, target_factory_custom_config_fixture):

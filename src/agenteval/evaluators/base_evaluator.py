@@ -44,6 +44,7 @@ class BaseEvaluator(ABC):
         aws_region: Optional[str] = None,
         endpoint_url: Optional[str] = None,
         max_retry: int = 10,
+        template_root: Optional[str] = None,
     ):
         """Initialize the evaluator.
 
@@ -58,6 +59,8 @@ class BaseEvaluator(ABC):
             aws_region (Optional[str]): The AWS region.
             endpoint_url (Optional[str]): The endpoint URL for the AWS service.
             max_retry (int): The maximum number of retry attempts.
+            template_root (Optional[str]): The root directory path for evaluator templates.
+                If None, uses the default template path for the evaluator type.
         """
         # overwrite the model_id with the provisioned_throughput_arn if provided, keep the request_config the same.
         if provisioned_throughput_arn:
@@ -73,6 +76,7 @@ class BaseEvaluator(ABC):
         self.input_token_count = 0
         self.output_token_count = 0
         self.model_config = model_config
+        self.template_root = template_root
         self.bedrock_runtime_client = create_boto3_client(
             boto3_service_name=_BOTO3_SERVICE_NAME,
             aws_profile=aws_profile,

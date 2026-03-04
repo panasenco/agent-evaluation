@@ -52,13 +52,19 @@ class EvaluatorFactory(BaseModel):
             BaseEvaluator: An instance of the evaluator class, with the configuration
                 parameters applied.
         """
-        reserved_config_keys = {"eval_method", "model", "custom_config"}
+        reserved_config_keys = {
+            "eval_method",
+            "model",
+            "custom_config",
+            "template_root",
+        }
         evaluator_cls = self._get_evaluator_class()
         return evaluator_cls(
             test=test,
             target=target,
             work_dir=work_dir,
             model_config=self._get_bedrock_model_config(),
+            template_root=self.config.get("template_root"),
             **{k: v for k, v in self.config.items() if k not in reserved_config_keys},
         )
 

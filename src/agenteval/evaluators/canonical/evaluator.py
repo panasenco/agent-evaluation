@@ -65,17 +65,16 @@ class CanonicalEvaluator(BaseEvaluator):
         """Initialize the evaluator."""
         super().__init__(**kwargs)
 
+        # Use custom template_root if provided, otherwise default to canonical templates
+        template_root = self.template_root or _PROMPT_TEMPLATE_ROOT
+
         self._prompt_template_map = {
             name: {
                 "system": jinja_env.get_template(
-                    os.path.join(
-                        _PROMPT_TEMPLATE_ROOT, _SYSTEM_PROMPT_DIR, f"{name}.jinja"
-                    )
+                    os.path.join(template_root, _SYSTEM_PROMPT_DIR, f"{name}.jinja")
                 ),
                 "prompt": jinja_env.get_template(
-                    os.path.join(
-                        _PROMPT_TEMPLATE_ROOT, _RUNTIME_PROMPT_DIR, f"{name}.jinja"
-                    )
+                    os.path.join(template_root, _RUNTIME_PROMPT_DIR, f"{name}.jinja")
                 ),
             }
             for name in _PROMPT_TEMPLATE_NAMES
