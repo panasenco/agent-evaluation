@@ -26,6 +26,10 @@ _PROMPT_TEMPLATE_NAMES = [
     "generate_evaluation",
 ]
 
+_OPTIONAL_PROMPT_TEMPLATE_NAMES = [
+    "generate_fail_follow_up",
+]
+
 # enable backwards-compatible StrEnum
 try:
     from enum import StrEnum
@@ -76,6 +80,8 @@ class CanonicalEvaluator(BaseEvaluator):
         else:
             template_env = jinja_env
             template_prefix = f"{_PROMPT_TEMPLATE_ROOT}/"
+
+        # Load required templates
         self._prompt_template_map = {
             name: {
                 "system": template_env.get_template(
@@ -87,6 +93,32 @@ class CanonicalEvaluator(BaseEvaluator):
             }
             for name in _PROMPT_TEMPLATE_NAMES
         }
+
+        # Load optional templates (if they exist)
+        for name in _OPTIONAL_PROMPT_TEMPLATE_NAMES:
+            try:
+                # Try to load runtime template (required for optional templates)
+                runtime_template = template_env.get_template(
+                    f"{template_prefix}{_RUNTIME_PROMPT_DIR}/{name}.jinja"
+                )
+
+                # Try to load system template (optional for some templates)
+                system_template = None
+                try:
+                    system_template = template_env.get_template(
+                        f"{template_prefix}{_SYSTEM_PROMPT_DIR}/{name}.jinja"
+                    )
+                except Exception:
+                    logger.debug(f"No system template for {name} (not required)")
+
+                self._prompt_template_map[name] = {
+                    "system": system_template,
+                    "prompt": runtime_template,
+                }
+                logger.debug(f"Loaded optional template: {name}")
+            except Exception as e:
+                logger.debug(f"Optional template {name} not found: {e}")
+                # Optional template not available, skip without error
 
     @staticmethod
     def _extract_content_from_xml(xml_data: str, element_names: list[str]) -> Tuple:
@@ -191,6 +223,32 @@ class CanonicalEvaluator(BaseEvaluator):
 
         return evaluation, reasoning
 
+    def _generate_fail_follow_up(self, failure_reasoning: str) -> str:
+        """Generate a follow-up question for the agent after a test failure.
+
+        Args:
+            failure_reasoning: The reasoning why the test failed
+
+        Returns:
+            The follow-up question to ask the agent
+        """
+        if "generate_fail_follow_up" not in self._prompt_template_map:
+            logger.debug("No follow-up template available")
+            return None
+
+        # Just render the runtime template directly - no LLM generation needed
+        follow_up_question = self._prompt_template_map["generate_fail_follow_up"]["prompt"].render(
+            failure_reasoning=failure_reasoning,
+            expected_results=self.test.expected_results,
+            conversation=self.conversation,
+        )
+
+        self.trace.add_step(
+            follow_up_question=follow_up_question,
+            note="Direct template rendering - no LLM generation",
+        )
+        return follow_up_question
+
     def _generate_user_response(self) -> str:
         system_prompt = self._prompt_template_map["generate_user_response"][
             "system"
@@ -228,6 +286,7 @@ class CanonicalEvaluator(BaseEvaluator):
         passed = False
         result = Results.MAX_TURNS_REACHED.value
         reasoning = ""
+        follow_up_response = None
 
         while self.conversation.turns < self.test.max_turns:
             if self.conversation.turns == 0:
@@ -253,9 +312,23 @@ class CanonicalEvaluator(BaseEvaluator):
                     == EvaluationCategories.NOT_ALL_EXPECTED_RESULTS_OBSERVED.value  # noqa: W503
                 ):
                     result = Results.NOT_ALL_EXPECTED_RESULTS_OBSERVED.value
+
+                    # Try to generate follow-up question if template is available
+                    follow_up_question = self._generate_fail_follow_up(reasoning)
+                    follow_up_response = None
+
+                    if follow_up_question:
+                        try:
+                            follow_up_response = self._invoke_target(follow_up_question)
+                            # Add the follow-up turn to the conversation
+                            self.conversation.add_turn(follow_up_question, follow_up_response)
+                        except Exception as e:
+                            logger.warning(f"Failed to get follow-up response: {e}")
+                            follow_up_response = None
                 else:
                     result = Results.ALL_EXPECTED_RESULTS_OBSERVED.value
                     passed = True
+                    follow_up_response = None
 
                 break
 
@@ -265,4 +338,5 @@ class CanonicalEvaluator(BaseEvaluator):
             result=result,
             reasoning=reasoning,
             conversation=self.conversation,
+            follow_up_response=follow_up_response,
         )

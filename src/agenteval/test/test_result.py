@@ -1,6 +1,7 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import Optional
 from pydantic import BaseModel
 
 from agenteval.conversation import Conversation
@@ -15,6 +16,7 @@ class TestResult(BaseModel, arbitrary_types_allowed=True):
         reasoning: The rationale for the test result.
         passed: `True` if the test passed, otherwise `False`.
         conversation: Captures the interaction between a user and an agent.
+        follow_up_response: Optional response from the agent to a follow-up question asked after a failure.
     """
 
     # do not collect as a pytest
@@ -25,3 +27,4 @@ class TestResult(BaseModel, arbitrary_types_allowed=True):
     reasoning: str
     passed: bool
     conversation: Conversation
+    follow_up_response: Optional[str] = None
