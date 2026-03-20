@@ -236,3 +236,153 @@ class TestCanonical:
         ]
         mock_get_template.assert_has_calls(expected_calls, any_order=True)
 
+
+class TestPassthroughMode:
+    """Tests for passthrough step evaluation mode."""
+
+    def test_passthrough_single_step_pass(self, mocker, evaluator_fixture):
+        """Test passthrough mode with a single step that passes."""
+        evaluator_fixture._passthrough_steps = True
+        evaluator_fixture.test.steps = ["What is the capital of France?"]
+        evaluator_fixture.test.initial_prompt = None
+
+        mock_invoke_target = mocker.patch.object(evaluator_fixture, "_invoke_target")
+        mock_invoke_target.return_value = "Paris"
+
+        mock_generate_evaluation = mocker.patch.object(
+            evaluator_fixture, "_generate_evaluation"
+        )
+        mock_generate_evaluation.return_value = (
+            evaluator.EvaluationCategories.ALL_EXPECTED_RESULTS_OBSERVED.value,
+            "",
+        )
+
+        result = evaluator_fixture.evaluate()
+
+        assert result.passed is True
+        assert result.result == evaluator.Results.ALL_EXPECTED_RESULTS_OBSERVED.value
+        mock_invoke_target.assert_called_once_with("What is the capital of France?")
+        mock_generate_evaluation.assert_called_once()
+
+    def test_passthrough_single_step_fail(self, mocker, evaluator_fixture):
+        """Test passthrough mode with a single step that fails."""
+        evaluator_fixture._passthrough_steps = True
+        evaluator_fixture.test.steps = ["What is the capital of France?"]
+        evaluator_fixture.test.initial_prompt = None
+
+        mock_invoke_target = mocker.patch.object(evaluator_fixture, "_invoke_target")
+        mock_invoke_target.return_value = "Berlin"
+
+        mock_generate_evaluation = mocker.patch.object(
+            evaluator_fixture, "_generate_evaluation"
+        )
+        mock_generate_evaluation.return_value = (
+            evaluator.EvaluationCategories.NOT_ALL_EXPECTED_RESULTS_OBSERVED.value,
+            "The agent said Berlin instead of Paris",
+        )
+
+        mocker.patch.object(evaluator_fixture, "_generate_fail_follow_up", return_value=None)
+
+        result = evaluator_fixture.evaluate()
+
+        assert result.passed is False
+        assert result.result == evaluator.Results.NOT_ALL_EXPECTED_RESULTS_OBSERVED.value
+
+    def test_passthrough_multi_step(self, mocker, evaluator_fixture):
+        """Test passthrough mode with multiple steps sent in sequence."""
+        evaluator_fixture._passthrough_steps = True
+        evaluator_fixture.test.steps = ["Step 1 question", "Step 2 follow-up"]
+        evaluator_fixture.test.initial_prompt = None
+        evaluator_fixture.test.max_turns = 5
+
+        mock_invoke_target = mocker.patch.object(evaluator_fixture, "_invoke_target")
+        mock_invoke_target.side_effect = ["Response 1", "Response 2"]
+
+        mock_generate_evaluation = mocker.patch.object(
+            evaluator_fixture, "_generate_evaluation"
+        )
+        mock_generate_evaluation.return_value = (
+            evaluator.EvaluationCategories.ALL_EXPECTED_RESULTS_OBSERVED.value,
+            "",
+        )
+
+        result = evaluator_fixture.evaluate()
+
+        assert result.passed is True
+        assert mock_invoke_target.call_count == 2
+        mock_invoke_target.assert_any_call("Step 1 question")
+        mock_invoke_target.assert_any_call("Step 2 follow-up")
+
+    def test_passthrough_respects_initial_prompt(self, mocker, evaluator_fixture):
+        """Test passthrough mode uses initial_prompt override for the first step."""
+        evaluator_fixture._passthrough_steps = True
+        evaluator_fixture.test.steps = ["Original step text"]
+        evaluator_fixture.test.initial_prompt = "Override prompt"
+
+        mock_invoke_target = mocker.patch.object(evaluator_fixture, "_invoke_target")
+        mock_invoke_target.return_value = "Some response"
+
+        mock_generate_evaluation = mocker.patch.object(
+            evaluator_fixture, "_generate_evaluation"
+        )
+        mock_generate_evaluation.return_value = (
+            evaluator.EvaluationCategories.ALL_EXPECTED_RESULTS_OBSERVED.value,
+            "",
+        )
+
+        result = evaluator_fixture.evaluate()
+
+        assert result.passed is True
+        mock_invoke_target.assert_called_once_with("Override prompt")
+
+    def test_passthrough_max_turns_exceeded(self, mocker, evaluator_fixture):
+        """Test passthrough mode when max_turns is less than number of steps."""
+        evaluator_fixture._passthrough_steps = True
+        evaluator_fixture.test.steps = ["Step 1", "Step 2", "Step 3"]
+        evaluator_fixture.test.initial_prompt = None
+        evaluator_fixture.test.max_turns = 2  # Only 2 turns allowed, but 3 steps
+
+        mock_invoke_target = mocker.patch.object(evaluator_fixture, "_invoke_target")
+        mock_invoke_target.side_effect = ["Response 1", "Response 2"]
+
+        result = evaluator_fixture.evaluate()
+
+        assert result.passed is False
+        assert result.result == evaluator.Results.MAX_TURNS_REACHED.value
+        assert mock_invoke_target.call_count == 2
+
+    def test_passthrough_no_llm_calls_for_steps(self, mocker, evaluator_fixture):
+        """Test that passthrough mode does NOT call generate_initial_prompt, generate_user_response, or generate_test_status."""
+        evaluator_fixture._passthrough_steps = True
+        evaluator_fixture.test.steps = ["Direct question"]
+        evaluator_fixture.test.initial_prompt = None
+
+        mock_invoke_target = mocker.patch.object(evaluator_fixture, "_invoke_target")
+        mock_invoke_target.return_value = "Agent response"
+
+        mock_generate_initial = mocker.patch.object(
+            evaluator_fixture, "_generate_initial_prompt"
+        )
+        mock_generate_user = mocker.patch.object(
+            evaluator_fixture, "_generate_user_response"
+        )
+        mock_generate_status = mocker.patch.object(
+            evaluator_fixture, "_generate_test_status"
+        )
+
+        mock_generate_evaluation = mocker.patch.object(
+            evaluator_fixture, "_generate_evaluation"
+        )
+        mock_generate_evaluation.return_value = (
+            evaluator.EvaluationCategories.ALL_EXPECTED_RESULTS_OBSERVED.value,
+            "",
+        )
+
+        evaluator_fixture.evaluate()
+
+        mock_generate_initial.assert_not_called()
+        mock_generate_user.assert_not_called()
+        mock_generate_status.assert_not_called()
+        # Only generate_evaluation should be called
+        mock_generate_evaluation.assert_called_once()
+

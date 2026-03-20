@@ -6,7 +6,7 @@ import os
 import re
 from typing import Tuple
 
-from jinja2 import Environment, FileSystemLoader
+from jinja2 import Environment, FileSystemLoader, TemplateNotFound
 from agenteval import jinja_env
 from agenteval.evaluators import BaseEvaluator
 from agenteval.evaluators.bedrock_request.bedrock_request_handler import (
@@ -77,9 +77,33 @@ class CanonicalEvaluator(BaseEvaluator):
                 autoescape=jinja_env.autoescape,
             )
             template_prefix = ""
+
+            # Check if generate_initial_prompt exists; if not, enable passthrough mode
+            # where steps are sent directly to the agent without LLM processing.
+            try:
+                template_env.get_template(
+                    f"{_RUNTIME_PROMPT_DIR}/generate_initial_prompt.jinja"
+                )
+                self._passthrough_steps = False
+            except TemplateNotFound:
+                self._passthrough_steps = True
+                logger.debug(
+                    "generate_initial_prompt template not found in custom template "
+                    "directory. Steps will be passed directly to the agent "
+                    "(passthrough mode)."
+                )
         else:
             template_env = jinja_env
             template_prefix = f"{_PROMPT_TEMPLATE_ROOT}/"
+            self._passthrough_steps = False
+
+        # In passthrough mode, only generate_evaluation is required since steps
+        # are sent directly to the agent and test_status is tracked by index.
+        required_templates = (
+            ["generate_evaluation"]
+            if self._passthrough_steps
+            else _PROMPT_TEMPLATE_NAMES
+        )
 
         # Load required templates
         self._prompt_template_map = {
@@ -91,7 +115,7 @@ class CanonicalEvaluator(BaseEvaluator):
                     f"{template_prefix}{_RUNTIME_PROMPT_DIR}/{name}.jinja"
                 ),
             }
-            for name in _PROMPT_TEMPLATE_NAMES
+            for name in required_templates
         }
 
         # Load optional templates (if they exist)
@@ -277,8 +301,84 @@ class CanonicalEvaluator(BaseEvaluator):
 
         return target_response.response
 
-    def evaluate(self) -> TestResult:
-        """Conduct the test.
+    def _evaluate_and_handle_result(self) -> tuple:
+        """Run evaluation and handle follow-up for failures.
+
+        Returns:
+            Tuple of (passed, result, reasoning, follow_up_response)
+        """
+        eval_category, reasoning = self._generate_evaluation()
+        follow_up_response = None
+
+        if (
+            eval_category
+            == EvaluationCategories.NOT_ALL_EXPECTED_RESULTS_OBSERVED.value  # noqa: W503
+        ):
+            result = Results.NOT_ALL_EXPECTED_RESULTS_OBSERVED.value
+
+            # Try to generate follow-up question if template is available
+            follow_up_question = self._generate_fail_follow_up(reasoning)
+
+            if follow_up_question:
+                try:
+                    follow_up_response = self._invoke_target(follow_up_question)
+                    self.conversation.add_turn(follow_up_question, follow_up_response)
+                except Exception as e:
+                    logger.warning(f"Failed to get follow-up response: {e}")
+                    follow_up_response = None
+
+            return False, result, reasoning, follow_up_response
+        else:
+            result = Results.ALL_EXPECTED_RESULTS_OBSERVED.value
+            return True, result, reasoning, None
+
+    def _evaluate_passthrough(self) -> TestResult:
+        """Evaluate by sending each step directly to the agent.
+
+        In passthrough mode, steps are used verbatim as agent prompts without
+        LLM processing, and test status is tracked by step index rather than
+        LLM classification. Only generate_evaluation is called (to judge results).
+
+        Returns:
+            TestResult
+        """
+        passed = False
+        result = Results.MAX_TURNS_REACHED.value
+        reasoning = ""
+        follow_up_response = None
+        all_steps_sent = False
+
+        for step_idx, step in enumerate(self.test.steps):
+            if self.conversation.turns >= self.test.max_turns:
+                break
+
+            # For the first step, honor initial_prompt override if provided
+            if step_idx == 0 and self.test.initial_prompt:
+                user_input = self.test.initial_prompt
+            else:
+                user_input = step
+
+            self.conversation.add_turn(user_input, self._invoke_target(user_input))
+        else:
+            # Loop completed without break — all steps were sent
+            all_steps_sent = True
+
+        if all_steps_sent:
+            passed, result, reasoning, follow_up_response = (
+                self._evaluate_and_handle_result()
+            )
+
+        return TestResult(
+            test_name=self.test.name,
+            passed=passed,
+            result=result,
+            reasoning=reasoning,
+            conversation=self.conversation,
+            follow_up_response=follow_up_response,
+        )
+
+    def _evaluate_standard(self) -> TestResult:
+        """Evaluate using LLM-driven step processing (original behavior).
 
         Returns:
             TestResult
@@ -306,30 +406,9 @@ class CanonicalEvaluator(BaseEvaluator):
             test_status = self._generate_test_status()
             if test_status == TestStatusCategories.ALL_STEPS_ATTEMPTED:
                 # evaluate conversation
-                eval_category, reasoning = self._generate_evaluation()
-                if (
-                    eval_category
-                    == EvaluationCategories.NOT_ALL_EXPECTED_RESULTS_OBSERVED.value  # noqa: W503
-                ):
-                    result = Results.NOT_ALL_EXPECTED_RESULTS_OBSERVED.value
-
-                    # Try to generate follow-up question if template is available
-                    follow_up_question = self._generate_fail_follow_up(reasoning)
-                    follow_up_response = None
-
-                    if follow_up_question:
-                        try:
-                            follow_up_response = self._invoke_target(follow_up_question)
-                            # Add the follow-up turn to the conversation
-                            self.conversation.add_turn(follow_up_question, follow_up_response)
-                        except Exception as e:
-                            logger.warning(f"Failed to get follow-up response: {e}")
-                            follow_up_response = None
-                else:
-                    result = Results.ALL_EXPECTED_RESULTS_OBSERVED.value
-                    passed = True
-                    follow_up_response = None
-
+                passed, result, reasoning, follow_up_response = (
+                    self._evaluate_and_handle_result()
+                )
                 break
 
         return TestResult(
@@ -340,3 +419,18 @@ class CanonicalEvaluator(BaseEvaluator):
             conversation=self.conversation,
             follow_up_response=follow_up_response,
         )
+
+    def evaluate(self) -> TestResult:
+        """Conduct the test.
+
+        In passthrough mode (when generate_initial_prompt template is missing
+        from the custom template directory), steps are sent directly to the
+        agent without LLM processing, saving evaluator LLM costs.
+
+        Returns:
+            TestResult
+        """
+        if self._passthrough_steps:
+            return self._evaluate_passthrough()
+        else:
+            return self._evaluate_standard()

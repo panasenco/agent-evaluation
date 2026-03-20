@@ -113,3 +113,73 @@ class TestCustomTemplates:
         # Verify that the template objects were created (using default templates)
         assert evaluator._prompt_template_map is not None
         assert len(evaluator._prompt_template_map) == 4
+        assert evaluator._passthrough_steps is False
+
+    @pytest.fixture
+    def passthrough_templates_dir(self):
+        """Create a custom template directory with only generate_evaluation.
+
+        When generate_initial_prompt is missing, the evaluator enters
+        passthrough mode and sends steps directly to the agent.
+        """
+        with tempfile.TemporaryDirectory() as temp_dir:
+            custom_root = os.path.join(temp_dir, "passthrough_templates")
+            system_dir = os.path.join(custom_root, "system")
+            runtime_dir = os.path.join(custom_root, "runtime")
+
+            os.makedirs(system_dir, exist_ok=True)
+            os.makedirs(runtime_dir, exist_ok=True)
+
+            # Only create generate_evaluation templates (no generate_initial_prompt,
+            # generate_user_response, or generate_test_status)
+            for directory in [system_dir, runtime_dir]:
+                with open(os.path.join(directory, "generate_evaluation.jinja"), 'w') as f:
+                    f.write("Evaluation template")
+
+            yield custom_root
+
+    def test_passthrough_mode_when_initial_prompt_template_missing(
+        self, mocker, test_fixture, target_fixture, passthrough_templates_dir
+    ):
+        """Test that missing generate_initial_prompt triggers passthrough mode."""
+        mock_session = mocker.patch.object(aws.boto3, "Session")
+        mocker.patch.object(mock_session.return_value, "client")
+
+        evaluator = CanonicalEvaluator(
+            aws_profile="test-profile",
+            aws_region="us-west-2",
+            endpoint_url=None,
+            model_config=DEFAULT_CLAUDE_3_MODEL_CONFIG,
+            test=test_fixture,
+            target=target_fixture,
+            work_dir="test_dir",
+            template_root=passthrough_templates_dir,
+        )
+
+        assert evaluator._passthrough_steps is True
+        # Only generate_evaluation should be loaded
+        assert "generate_evaluation" in evaluator._prompt_template_map
+        assert "generate_initial_prompt" not in evaluator._prompt_template_map
+        assert "generate_user_response" not in evaluator._prompt_template_map
+        assert "generate_test_status" not in evaluator._prompt_template_map
+
+    def test_passthrough_mode_not_triggered_with_all_templates(
+        self, mocker, test_fixture, target_fixture, custom_templates_dir
+    ):
+        """Test that passthrough mode is NOT activated when all templates exist."""
+        mock_session = mocker.patch.object(aws.boto3, "Session")
+        mocker.patch.object(mock_session.return_value, "client")
+
+        evaluator = CanonicalEvaluator(
+            aws_profile="test-profile",
+            aws_region="us-west-2",
+            endpoint_url=None,
+            model_config=DEFAULT_CLAUDE_3_MODEL_CONFIG,
+            test=test_fixture,
+            target=target_fixture,
+            work_dir="test_dir",
+            template_root=custom_templates_dir,
+        )
+
+        assert evaluator._passthrough_steps is False
+        assert len(evaluator._prompt_template_map) == 4
