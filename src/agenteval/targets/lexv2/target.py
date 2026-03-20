@@ -3,6 +3,8 @@
 
 import uuid
 
+from botocore.exceptions import TokenRetrievalError
+
 from agenteval.targets import Boto3Target, TargetResponse
 
 _SERVICE_NAME = "lexv2-runtime"
@@ -33,7 +35,12 @@ class LexV2Target(Boto3Target):
             "text": prompt,
         }
 
-        response = self.boto3_client.recognize_text(**args)
+        try:
+            response = self.boto3_client.recognize_text(**args)
+        except TokenRetrievalError:
+            self.refresh_boto3_client()
+            response = self.boto3_client.recognize_text(**args)
+
         if response["sessionState"]["dialogAction"]["type"] == "Close":
             completion = "Completed"
         else:

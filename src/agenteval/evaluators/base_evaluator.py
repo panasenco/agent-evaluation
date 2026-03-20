@@ -2,8 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import logging
 from abc import ABC, abstractmethod
 from typing import Optional
+
+from botocore.exceptions import TokenRetrievalError
 
 from agenteval.conversation import Conversation
 from agenteval.evaluators.model_config.bedrock_model_config import BedrockModelConfig
@@ -11,9 +14,11 @@ from agenteval.hook import Hook
 from agenteval.targets import BaseTarget
 from agenteval.test import Test, TestResult
 from agenteval.trace import Trace
-from agenteval.utils import create_boto3_client, import_class
+from agenteval.utils import create_boto3_client, import_class, refresh_boto3_client
 
 _BOTO3_SERVICE_NAME = "bedrock-runtime"
+
+logger = logging.getLogger(__name__)
 
 
 class BaseEvaluator(ABC):
@@ -77,6 +82,13 @@ class BaseEvaluator(ABC):
         self.output_token_count = 0
         self.model_config = model_config
         self.template_root = template_root
+
+        # Store AWS connection params to allow client recreation on token expiry
+        self._aws_profile = aws_profile
+        self._aws_region = aws_region
+        self._endpoint_url = endpoint_url
+        self._max_retry = max_retry
+
         self.bedrock_runtime_client = create_boto3_client(
             boto3_service_name=_BOTO3_SERVICE_NAME,
             aws_profile=aws_profile,
@@ -99,10 +111,27 @@ class BaseEvaluator(ABC):
             hook_cls = import_class(hook, parent_class=Hook)
             return hook_cls
 
+    def _refresh_bedrock_client(self):
+        """Recreate the bedrock runtime client with a fresh boto3 session.
+
+        This is used to recover from expired SSO/SSO-OIDC tokens by establishing
+        a new session that re-reads cached credentials.
+        """
+        self.bedrock_runtime_client = refresh_boto3_client(
+            boto3_service_name=_BOTO3_SERVICE_NAME,
+            aws_profile=self._aws_profile,
+            aws_region=self._aws_region,
+            endpoint_url=self._endpoint_url,
+            max_retry=self._max_retry,
+        )
+
     def invoke_model(self, request_body: dict) -> dict:
         """
         Invoke the Bedrock model using the `boto3_client`. This method will convert
         a request dictionary to a JSON string before passing it to the `InvokeModel` API.
+
+        If the SSO token has expired, the client will be recreated with a fresh session
+        and the request will be retried once.
 
         Refer to the `boto3` documentation for more details.
 
@@ -113,9 +142,19 @@ class BaseEvaluator(ABC):
             dict: The response from the model invocation.
 
         """
-        response = self.bedrock_runtime_client.invoke_model(
-            modelId=self.model_config.model_id, body=json.dumps(request_body)
-        )
+        try:
+            response = self.bedrock_runtime_client.invoke_model(
+                modelId=self.model_config.model_id, body=json.dumps(request_body)
+            )
+        except TokenRetrievalError:
+            logger.warning(
+                "SSO token expired during evaluator model invocation, "
+                "refreshing client and retrying..."
+            )
+            self._refresh_bedrock_client()
+            response = self.bedrock_runtime_client.invoke_model(
+                modelId=self.model_config.model_id, body=json.dumps(request_body)
+            )
 
         self._incr_token_counts(response)
 

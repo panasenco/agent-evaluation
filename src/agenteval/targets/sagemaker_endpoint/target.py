@@ -4,6 +4,7 @@
 import json
 from typing import Optional
 
+from botocore.exceptions import TokenRetrievalError
 from jsonpath_ng import parse
 
 from agenteval.targets import Boto3Target, TargetResponse
@@ -113,7 +114,11 @@ class SageMakerEndpointTarget(Boto3Target):
         """
         self._update_request(prompt)
 
-        response = self.boto3_client.invoke_endpoint(**self._args)
+        try:
+            response = self.boto3_client.invoke_endpoint(**self._args)
+        except TokenRetrievalError:
+            self.refresh_boto3_client()
+            response = self.boto3_client.invoke_endpoint(**self._args)
 
         response_body = json.loads(response.get("Body").read())
 

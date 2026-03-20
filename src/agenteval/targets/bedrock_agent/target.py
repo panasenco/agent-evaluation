@@ -4,6 +4,8 @@
 import uuid
 from typing import Optional
 
+from botocore.exceptions import TokenRetrievalError
+
 from agenteval.targets import Boto3Target, TargetResponse
 
 _SERVICE_NAME = "bedrock-agent-runtime"
@@ -58,19 +60,35 @@ class BedrockAgentTarget(Boto3Target):
             "enableTrace": True,
         }
 
-        response = self.boto3_client.invoke_agent(**args)
+        try:
+            response = self.boto3_client.invoke_agent(**args)
 
-        stream = response["completion"]
-        completion = ""
-        trace_data = []
+            stream = response["completion"]
+            completion = ""
+            trace_data = []
 
-        for event in stream:
-            chunk = event.get("chunk")
-            event_trace = event.get("trace")
-            if chunk:
-                completion += chunk.get("bytes").decode()
-            if event_trace:
-                trace_data.append(event_trace.get("trace"))
+            for event in stream:
+                chunk = event.get("chunk")
+                event_trace = event.get("trace")
+                if chunk:
+                    completion += chunk.get("bytes").decode()
+                if event_trace:
+                    trace_data.append(event_trace.get("trace"))
+        except TokenRetrievalError:
+            self.refresh_boto3_client()
+            response = self.boto3_client.invoke_agent(**args)
+
+            stream = response["completion"]
+            completion = ""
+            trace_data = []
+
+            for event in stream:
+                chunk = event.get("chunk")
+                event_trace = event.get("trace")
+                if chunk:
+                    completion += chunk.get("bytes").decode()
+                if event_trace:
+                    trace_data.append(event_trace.get("trace"))
 
         return TargetResponse(
             response=completion, data={"bedrock_agent_trace": trace_data}

@@ -1,6 +1,8 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+from botocore.exceptions import TokenRetrievalError
+
 from agenteval.targets import Boto3Target, TargetResponse
 
 _SERVICE_NAME = "bedrock-agent-runtime"
@@ -44,28 +46,51 @@ class BedrockFlowTarget(Boto3Target):
             ],
         }
 
-        response = self.boto3_client.invoke_flow(**args)
+        try:
+            response = self.boto3_client.invoke_flow(**args)
 
-        stream = response["responseStream"]
-        completion = ""
-        trace_data = []
+            stream = response["responseStream"]
+            completion = ""
+            trace_data = []
 
-        for event in stream:
-            if "flowTraceEvent" in event:
-                trace_data.append(event["flowTraceEvent"].get("trace"))
-            if "flowOutputEvent" in event:
-                output_event = event["flowOutputEvent"]
-                # Testing 2024-12 suggests 'nodeType' actually not always present in API (despite
-                # the docs?):
-                if (
-                    "nodeType" not in output_event
-                    or output_event["nodeType"] == "FlowOutputNode"
-                ):
-                    completion += output_event.get("content", {}).get("document", "")
+            for event in stream:
+                if "flowTraceEvent" in event:
+                    trace_data.append(event["flowTraceEvent"].get("trace"))
+                if "flowOutputEvent" in event:
+                    output_event = event["flowOutputEvent"]
+                    # Testing 2024-12 suggests 'nodeType' actually not always present in API (despite
+                    # the docs?):
+                    if (
+                        "nodeType" not in output_event
+                        or output_event["nodeType"] == "FlowOutputNode"
+                    ):
+                        completion += output_event.get("content", {}).get("document", "")
 
-            errs = {k: v for k, v in event.items() if k.endswith("Exception")}
-            if errs:
-                raise ValueError(errs)
+                errs = {k: v for k, v in event.items() if k.endswith("Exception")}
+                if errs:
+                    raise ValueError(errs)
+        except TokenRetrievalError:
+            self.refresh_boto3_client()
+            response = self.boto3_client.invoke_flow(**args)
+
+            stream = response["responseStream"]
+            completion = ""
+            trace_data = []
+
+            for event in stream:
+                if "flowTraceEvent" in event:
+                    trace_data.append(event["flowTraceEvent"].get("trace"))
+                if "flowOutputEvent" in event:
+                    output_event = event["flowOutputEvent"]
+                    if (
+                        "nodeType" not in output_event
+                        or output_event["nodeType"] == "FlowOutputNode"
+                    ):
+                        completion += output_event.get("content", {}).get("document", "")
+
+                errs = {k: v for k, v in event.items() if k.endswith("Exception")}
+                if errs:
+                    raise ValueError(errs)
 
         return TargetResponse(
             response=completion, data={"bedrock_flow_trace": trace_data}

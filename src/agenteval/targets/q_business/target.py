@@ -3,6 +3,8 @@
 
 from typing import Optional
 
+from botocore.exceptions import TokenRetrievalError
+
 from agenteval.targets import Boto3Target, TargetResponse
 
 _SERVICE_NAME = "qbusiness"
@@ -42,7 +44,11 @@ class QBusinessTarget(Boto3Target):
         """
         self._chat_sync_args["userMessage"] = prompt
 
-        response = self.boto3_client.chat_sync(**self._chat_sync_args)
+        try:
+            response = self.boto3_client.chat_sync(**self._chat_sync_args)
+        except TokenRetrievalError:
+            self.refresh_boto3_client()
+            response = self.boto3_client.chat_sync(**self._chat_sync_args)
 
         if "conversationId" not in self._chat_sync_args:
             self._chat_sync_args["conversationId"] = response["conversationId"]

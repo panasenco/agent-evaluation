@@ -1,6 +1,8 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+from botocore.exceptions import TokenRetrievalError
+
 from agenteval.targets import Boto3Target, TargetResponse
 
 _SERVICE_NAME = "bedrock-agent-runtime"
@@ -48,7 +50,12 @@ class BedrockKnowledgeBaseTarget(Boto3Target):
         if self._session_id:
             args["sessionId"] = self._session_id
 
-        response = self.boto3_client.retrieve_and_generate(**args)
+        try:
+            response = self.boto3_client.retrieve_and_generate(**args)
+        except TokenRetrievalError:
+            self.refresh_boto3_client()
+            response = self.boto3_client.retrieve_and_generate(**args)
+
         generated_text = response["output"]["text"]
         citations = response["citations"]
         self._session_id = response["sessionId"]
